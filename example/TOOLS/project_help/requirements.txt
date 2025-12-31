@@ -1,0 +1,4 @@
+# Project-Help MCP Service Dependencies
+
+mcp>=1.0.0
+PyYAML>=6.0

@@ -1,0 +1,320 @@
+"""
+项目助手MCP服务
+用于基于AI开发助手模板的项目，提供模块信息读取功能
+"""
+
+import os
+import yaml
+import asyncio
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from mcp.server import Server
+from mcp.types import (
+    Resource,
+    Tool,
+    TextContent,
+    LoggingLevel
+)
+import mcp.server.stdio
+
+
+class ProjectModuleExplorer:
+    """项目模块探索器，用于读取和解析项目中的README.md文件"""
+
+    def __init__(self, project_root: Optional[str] = None):
+        """
+        初始化探索器
+
+        Args:
+            project_root: 项目根目录路径，如果为None则使用当前工作目录
+        """
+        self.project_root = Path(project_root) if project_root else Path.cwd()
+
+    def find_all_readme_files(self) -> List[Path]:
+        """
+        查找项目中所有README.md文件
+
+        Returns:
+            README.md文件路径列表
+        """
+        readme_files = []
+        for path in self.project_root.rglob("README.md"):
+            # 排除一些常见的依赖目录
+            if any(excluded in str(path) for excluded in ['node_modules', '.git', '__pycache__', 'venv', '.venv']):
+                continue
+            readme_files.append(path)
+        return readme_files
+
+    def parse_yaml_header(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        """
+        解析README.md文件中的YAML头
+
+        Args:
+            file_path: README.md文件路径
+
+        Returns:
+            解析后的YAML数据，如果没有YAML头则返回None
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 检查是否以---开头
+            if not content.startswith('---'):
+                return None
+
+            # 查找第二个---
+            parts = content.split('---', 2)
+            if len(parts) < 3:
+                return None
+
+            yaml_content = parts[1]
+            yaml_data = yaml.safe_load(yaml_content)
+
+            return yaml_data if isinstance(yaml_data, dict) else None
+
+        except Exception as e:
+            print(f"解析YAML头失败 {file_path}: {e}")
+            return None
+
+    def get_module_content(self, file_path: Path) -> str:
+        """
+        获取README.md的完整内容
+
+        Args:
+            file_path: README.md文件路径
+
+        Returns:
+            文件内容
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            return f"读取文件失败: {e}"
+
+    def get_all_modules_info(self) -> List[Dict[str, Any]]:
+        """
+        获取所有模块的信息
+
+        Returns:
+            模块信息列表
+        """
+        modules = []
+        readme_files = self.find_all_readme_files()
+
+        for readme_path in readme_files:
+            yaml_data = self.parse_yaml_header(readme_path)
+
+            if yaml_data:
+                # 计算相对路径
+                try:
+                    relative_path = readme_path.relative_to(self.project_root)
+                except ValueError:
+                    relative_path = readme_path
+
+                module_info = {
+                    'path': str(relative_path),
+                    'absolute_path': str(readme_path),
+                    'yaml_header': yaml_data,
+                    'has_yaml': True
+                }
+
+                # 提取关键信息用于简介
+                name = yaml_data.get('name', '未命名模块')
+                description = yaml_data.get('description', '暂无描述')
+                state = yaml_data.get('state', 'unknown')
+                author = yaml_data.get('author', '未知')
+
+                module_info['summary'] = {
+                    'name': name,
+                    'description': description.strip() if isinstance(description, str) else description,
+                    'state': state,
+                    'author': author
+                }
+
+                modules.append(module_info)
+
+        return modules
+
+    def get_module_details(self, path: str) -> Optional[Dict[str, Any]]:
+        """
+        获取指定路径下README.md的详情
+
+        Args:
+            path: 相对路径或绝对路径
+
+        Returns:
+            模块详情，如果找不到返回None
+        """
+        # 尝试作为相对路径
+        file_path = self.project_root / path
+        if not file_path.exists():
+            # 尝试作为绝对路径
+            file_path = Path(path)
+
+        if not file_path.exists() or file_path.name != 'README.md':
+            return None
+
+        yaml_data = self.parse_yaml_header(file_path)
+        content = self.get_module_content(file_path)
+
+        try:
+            relative_path = file_path.relative_to(self.project_root)
+        except ValueError:
+            relative_path = file_path
+
+        return {
+            'path': str(relative_path),
+            'absolute_path': str(file_path),
+            'yaml_header': yaml_data,
+            'has_yaml': yaml_data is not None,
+            'full_content': content
+        }
+
+
+# 创建FastMCP应用
+app = Server("project-help")
+
+# 自动检测项目根目录（当前文件的 PROJECT_ROOT/TOOLS/project_help/service.py）
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+explorer = ProjectModuleExplorer(str(PROJECT_ROOT))
+
+
+@app.list_resources()
+async def list_resources() -> list[Resource]:
+    """列出可用资源"""
+    return [
+        Resource(
+            uri="project://modules",
+            name="项目模块列表",
+            description="项目中所有带YAML头的README.md模块信息",
+            mimeType="application/json"
+        )
+    ]
+
+
+@app.list_tools()
+async def list_tools() -> list[Tool]:
+    """列出可用工具"""
+    return [
+        Tool(
+            name="get_all_modules",
+            description="获取项目中所有带有YAML头的README.md文件信息，返回模块列表和简介",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_module_details",
+            description="获取指定路径下README.md文件的详细信息，包括完整内容和YAML头",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "README.md文件的路径（相对路径或绝对路径），例如: PROJECT/README.md"
+                    }
+                },
+                "required": ["path"]
+            }
+        )
+    ]
+
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    """调用工具"""
+    try:
+        if name == "get_all_modules":
+            modules = explorer.get_all_modules_info()
+
+            if not modules:
+                return [TextContent(
+                    type="text",
+                    text="未找到带有YAML头的README.md文件。"
+                )]
+
+            # 构建输出
+            output = []
+            output.append("=" * 60)
+            output.append(f"找到 {len(modules)} 个模块")
+            output.append("=" * 60)
+            output.append("")
+
+            for i, module in enumerate(modules, 1):
+                summary = module['summary']
+                output.append(f"【模块 {i}】")
+                output.append(f"名称: {summary['name']}")
+                output.append(f"路径: {module['path']}")
+                output.append(f"状态: {summary['state']}")
+                output.append(f"作者: {summary['author']}")
+                output.append(f"描述:")
+                output.append(summary['description'])
+                output.append("-" * 40)
+                output.append("")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "get_module_details":
+            path = arguments.get("path", "")
+            if not path:
+                return [TextContent(type="text", text="错误: 请提供path参数")]
+
+            details = explorer.get_module_details(path)
+
+            if not details:
+                return [TextContent(
+                    type="text",
+                    text=f"未找到指定路径的文件: {path}\n请确保路径正确且文件名为README.md"
+                )]
+
+            # 构建输出
+            output = []
+            output.append("=" * 60)
+            output.append("模块详细信息")
+            output.append("=" * 60)
+            output.append("")
+            output.append(f"文件路径: {details['path']}")
+            output.append(f"包含YAML头: {'是' if details['has_yaml'] else '否'}")
+            output.append("")
+
+            if details['yaml_header']:
+                output.append("YAML头信息:")
+                output.append("-" * 40)
+                for key, value in details['yaml_header'].items():
+                    output.append(f"{key}: {value}")
+                output.append("-" * 40)
+                output.append("")
+
+            output.append("完整内容:")
+            output.append("=" * 60)
+            output.append(details['full_content'])
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        else:
+            return [TextContent(type="text", text=f"未知工具: {name}")]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"工具调用出错: {str(e)}")]
+
+
+async def main():
+    """主函数，运行MCP服务器"""
+    from mcp.server.stdio import stdio_server
+
+    async with stdio_server() as (read_stream, write_stream):
+        await app.run(
+            read_stream,
+            write_stream,
+            app.create_initialization_options()
+        )
+
+
+if __name__ == "__main__":
+    # 运行服务器
+    asyncio.run(main())

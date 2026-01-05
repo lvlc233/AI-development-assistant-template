@@ -6,6 +6,8 @@
 import os
 import yaml
 import asyncio
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -174,6 +176,60 @@ class ProjectModuleExplorer:
         }
 
 
+def format_current_time_in_timezone(tz: str) -> str:
+    tz_value = (tz or "").strip()
+    if not tz_value:
+        raise ValueError("timezone不能为空")
+
+    tz_fallback_to_offset = {
+        "Asia/Shanghai": "+08:00",
+        "Asia/Chongqing": "+08:00",
+        "Asia/Hong_Kong": "+08:00",
+        "Asia/Taipei": "+08:00",
+        "Etc/UTC": "UTC",
+    }
+
+    def parse_offset(value: str) -> Optional[timezone]:
+        v = value.strip().upper()
+        if v in {"UTC", "GMT", "Z"}:
+            return timezone.utc
+
+        m = re.match(r"^(?:UTC|GMT)?\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?\s*$", v)
+        if not m:
+            return None
+
+        sign, hours_s, minutes_s = m.groups()
+        hours = int(hours_s)
+        minutes = int(minutes_s) if minutes_s else 0
+
+        if hours > 23 or minutes > 59:
+            return None
+
+        delta = timedelta(hours=hours, minutes=minutes)
+        if sign == "-":
+            delta = -delta
+        return timezone(delta)
+
+    tzinfo = parse_offset(tz_value)
+    if tzinfo is None and tz_value in tz_fallback_to_offset:
+        tzinfo = parse_offset(tz_fallback_to_offset[tz_value])
+
+    if tzinfo is None:
+        try:
+            from zoneinfo import ZoneInfo
+
+            tzinfo = ZoneInfo(tz_value)
+        except Exception as e:
+            raise ValueError(
+                f"无法识别或加载timezone: {tz_value}。"
+                f"建议使用UTC/UTC+8/+08:00这类偏移格式，或安装tzdata以支持IANA时区（例如Asia/Shanghai）。"
+                f"错误: {e}"
+            )
+
+    now = datetime.now(tzinfo)
+    return f"{now.year}年{now.month:02d}月{now.day:02d}日 {now.hour:02d}:{now.minute:02d}"
+
+
 # 创建FastMCP应用
 app = Server("project-help")
 
@@ -220,6 +276,20 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["path"]
+            }
+        ),
+        Tool(
+            name="get_current_time",
+            description="获取指定时区的当前时间，返回格式：年月日 时分（例如：2026年01月02日 09:30）",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timezone": {
+                        "type": "string",
+                        "description": "时区（支持UTC/UTC+8/+08:00/Asia/Shanghai等）。默认Asia/Shanghai"
+                    }
+                },
+                "required": []
             }
         )
     ]
@@ -295,6 +365,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             output.append(details['full_content'])
 
             return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "get_current_time":
+            tz = arguments.get("timezone", "Asia/Shanghai")
+            time_text = format_current_time_in_timezone(tz)
+            return [TextContent(type="text", text=time_text)]
 
         else:
             return [TextContent(type="text", text=f"未知工具: {name}")]

@@ -9,7 +9,7 @@ from pathlib import Path
 # 添加当前目录到Python路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from service import ProjectModuleExplorer
+from service import ProjectModuleExplorer, format_current_time_in_timezone
 
 
 def test_get_all_modules():
@@ -122,6 +122,22 @@ def test_yaml_parsing():
     return True
 
 
+def test_get_current_time_in_timezone():
+    print("=" * 70)
+    print("测试 4: 获取指定时区当前时间")
+    print("=" * 70)
+    print()
+
+    value = format_current_time_in_timezone("UTC")
+    if not value or len(value) != len("2000年01月01日 00:00"):
+        print(f"[错误] 返回格式不符合预期: {value}")
+        return False
+
+    print(f"[成功] UTC时间: {value}")
+    print()
+    return True
+
+
 async def main():
     """运行所有测试"""
     print("\n")
@@ -141,6 +157,9 @@ async def main():
         test3_passed = test_yaml_parsing()
         print("\n")
 
+        test4_passed = test_get_current_time_in_timezone()
+        print("\n")
+
         # 总结
         print("=" * 70)
         print("测试总结")
@@ -148,9 +167,10 @@ async def main():
         print(f"测试 1 (获取所有模块): {'[通过]' if test1_passed else '[失败]'}")
         print(f"测试 2 (获取模块详情): {'[通过]' if test2_passed else '[失败]'}")
         print(f"测试 3 (YAML解析): {'[通过]' if test3_passed else '[失败]'}")
+        print(f"测试 4 (获取当前时间): {'[通过]' if test4_passed else '[失败]'}")
         print()
 
-        if all([test1_passed, test2_passed, test3_passed]):
+        if all([test1_passed, test2_passed, test3_passed, test4_passed]):
             print("[成功] 所有测试通过！服务正常运行。")
         else:
             print("[警告] 部分测试失败，请检查服务配置。")

@@ -2,6 +2,9 @@
   <a href="README.md">English</a> | <strong>中文</strong>
 </p>
 
+# 补充:
+如果你想要轻量化的快捷的开发，请使用light，如果想要强大的版本控制，请使用full。(个人推荐light)，git版本补充中。
+
 # AI 开发助手模板
 
 一个释放开发助手 Agent 潜力的管理模板，专注于提升可读性和代码质量，灵感来自规范驱动开发和 Skill。

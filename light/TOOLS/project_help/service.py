@@ -5,24 +5,18 @@
 
 import os
 import yaml
-import asyncio
 import re
+import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from fastmcp import FastMCP
 
-from mcp.server import Server
-from mcp.types import (
-    Resource,
-    Tool,
-    TextContent,
-    LoggingLevel
-)
-import mcp.server.stdio
-
-
-
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("project-help")
 
 class ProjectModuleExplorer:
     """项目模块探索器，用于读取和解析项目中的README.md文件"""
@@ -35,48 +29,6 @@ class ProjectModuleExplorer:
             project_root: 项目根目录路径，如果为None则使用当前工作目录
         """
         self.project_root = Path(project_root) if project_root else Path.cwd()
-    
-    """
-        辅助工具
-    """
-    def _scan_todos(root_dir: str) -> List[Dict[str, Any]]:
-        """
-        扫描指定目录下的 TODO，并提取上下文。
-        """
-        todos = []
-        # 遍历文件
-        for root, dirs, files in os.walk(root_dir):
-            # 忽略常见的非代码目录
-            if any(ignore in root for ignore in ['.git', '__pycache__', 'node_modules', '.venv', 'venv']):
-                continue
-                
-            for file in files:
-                if not file.endswith(('.py', '.java', '.js', '.ts', '.md')): # 支持常见代码文件
-                    continue
-                    
-                file_path = os.path.join(root, file)
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        lines = f.readlines()
-                        
-                    for i, line in enumerate(lines):
-                        if 'TODO' in line:
-                            # 上下文提取：TODO 行 + 后续 15 行
-                            context_lines = lines[i:min(i+15, len(lines))]
-                            context = "".join(context_lines).strip()
-                            
-                            rel_path = os.path.relpath(file_path, root_dir)
-                            todos.append({
-                                'file': rel_path,
-                                'line': i + 1,
-                                'content': line.strip(),
-                                'context': context
-                            })
-                except Exception as e:
-                    # 忽略读取错误
-                    pass
-        return todos
-    
     
     def find_all_readme_files(self) -> List[Path]:
         """
@@ -276,165 +228,213 @@ def format_current_time_in_timezone(tz: str) -> str:
 
 
 # 创建MCP应用
-app = Server("project-help")
+mcp = FastMCP("project-help")
 
 # 自动检测项目根目录（当前文件的 PROJECT_ROOT/TOOLS/project_help/service.py）
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 explorer = ProjectModuleExplorer(str(PROJECT_ROOT))
 
 
-@app.list_resources()
-async def list_resources() -> list[Resource]:
-    """列出可用资源"""
-    return [
-        Resource(
-            uri="project://modules",
-            name="项目模块列表",
-            description="项目中所有带YAML头的README.md模块信息",
-            mimeType="application/json"
-        )
-    ]
+@mcp.resource("project://modules")
+def list_resources() -> List[Dict[str, Any]]:
+    """项目中所有带YAML头的README.md模块信息"""
+    return explorer.get_all_modules_info()
 
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    """列出可用工具"""
-    return [
-        Tool(
-            name="get_all_modules",
-            description="你必须调用该工具以确保你对整个项目的了解，除非你已经查看过相关的记录",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        ),
-        Tool(
-            name="get_module_details",
-            description="你可以使用这个工具获取项目的部分详情。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "README.md文件的路径（相对路径或绝对路径），例如: PROJECT/README.md"
-                    }
-                },
-                "required": ["path"]
-            }
-        ),
-        Tool(
-            name="get_current_time",
-            description="获取指定时区的当前时间，返回格式：年月日 时分（例如：2026年01月02日 09:30）",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "timezone": {
-                        "type": "string",
-                        "description": "时区（支持UTC/UTC+8/+08:00/Asia/Shanghai等）。默认Asia/Shanghai"
-                    }
-                },
-                "required": []
-            }
-        )
-    ]
+@mcp.tool(name="get_all_modules")
+def get_all_modules() -> str:
+    """你必须调用该工具以确保你对整个项目的了解，除非你已经查看过相关的记录"""
+    modules = explorer.get_all_modules_info()
+
+    if not modules:
+        return "未找到带有YAML头的README.md文件。"
+
+    # 构建输出
+    output = []
+    output.append("=" * 60)
+    output.append(f"找到 {len(modules)} 个模块")
+    output.append("=" * 60)
+    output.append("")
+
+    for i, module in enumerate(modules, 1):
+        summary = module['summary']
+        output.append(f"【模块 {i}】")
+        output.append(f"名称: {summary['name']}")
+        output.append(f"路径: {module['path']}")
+        output.append(f"状态: {summary['state']}")
+        output.append(f"作者: {summary['author']}")
+        output.append(f"描述:")
+        output.append(summary['description'])
+        output.append("-" * 40)
+        output.append("")
+
+    return "\n".join(output)
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """调用工具"""
+@mcp.tool(name="get_module_details")
+def get_module_details(path: str) -> str:
+    """你可以使用这个工具获取项目的部分详情。
+    
+    Args:
+        path: README.md文件的路径（相对路径或绝对路径），例如: PROJECT/README.md
+    """
+    if not path:
+        return "错误: 请提供path参数"
+
+    details = explorer.get_module_details(path)
+
+    if not details:
+        return f"未找到指定路径的文件: {path}\n请确保路径正确且文件名为README.md"
+
+    # 构建输出
+    output = []
+    output.append("=" * 60)
+    output.append("模块详细信息")
+    output.append("=" * 60)
+    output.append("")
+    output.append(f"文件路径: {details['path']}")
+    output.append(f"包含YAML头: {'是' if details['has_yaml'] else '否'}")
+    output.append("")
+
+    if details['yaml_header']:
+        output.append("YAML头信息:")
+        output.append("-" * 40)
+        for key, value in details['yaml_header'].items():
+            output.append(f"{key}: {value}")
+        output.append("-" * 40)
+        output.append("")
+
+    output.append("完整内容:")
+    output.append("=" * 60)
+    output.append(details['full_content'])
+
+    return "\n".join(output)
+
+
+@mcp.tool(name="get_current_time")
+def get_current_time(timezone: str = "Asia/Shanghai") -> str:
+    """获取指定时区的当前时间，返回格式：年月日 时分（例如：2026年01月02日 09:30）
+    
+    Args:
+        timezone: 时区（支持UTC/UTC+8/+08:00/Asia/Shanghai等）。默认Asia/Shanghai
+    """
     try:
-        if name == "get_all_modules":
-            modules = explorer.get_all_modules_info()
-
-            if not modules:
-                return [TextContent(
-                    type="text",
-                    text="未找到带有YAML头的README.md文件。"
-                )]
-
-            # 构建输出
-            output = []
-            output.append("=" * 60)
-            output.append(f"找到 {len(modules)} 个模块")
-            output.append("=" * 60)
-            output.append("")
-
-            for i, module in enumerate(modules, 1):
-                summary = module['summary']
-                output.append(f"【模块 {i}】")
-                output.append(f"名称: {summary['name']}")
-                output.append(f"路径: {module['path']}")
-                output.append(f"状态: {summary['state']}")
-                output.append(f"作者: {summary['author']}")
-                output.append(f"描述:")
-                output.append(summary['description'])
-                output.append("-" * 40)
-                output.append("")
-
-            return [TextContent(type="text", text="\n".join(output))]
-
-        elif name == "get_module_details":
-            path = arguments.get("path", "")
-            if not path:
-                return [TextContent(type="text", text="错误: 请提供path参数")]
-
-            details = explorer.get_module_details(path)
-
-            if not details:
-                return [TextContent(
-                    type="text",
-                    text=f"未找到指定路径的文件: {path}\n请确保路径正确且文件名为README.md"
-                )]
-
-            # 构建输出
-            output = []
-            output.append("=" * 60)
-            output.append("模块详细信息")
-            output.append("=" * 60)
-            output.append("")
-            output.append(f"文件路径: {details['path']}")
-            output.append(f"包含YAML头: {'是' if details['has_yaml'] else '否'}")
-            output.append("")
-
-            if details['yaml_header']:
-                output.append("YAML头信息:")
-                output.append("-" * 40)
-                for key, value in details['yaml_header'].items():
-                    output.append(f"{key}: {value}")
-                output.append("-" * 40)
-                output.append("")
-
-            output.append("完整内容:")
-            output.append("=" * 60)
-            output.append(details['full_content'])
-
-            return [TextContent(type="text", text="\n".join(output))]
-
-        elif name == "get_current_time":
-            tz = arguments.get("timezone", "Asia/Shanghai")
-            time_text = format_current_time_in_timezone(tz)
-            return [TextContent(type="text", text=time_text)]
-
-        else:
-            return [TextContent(type="text", text=f"未知工具: {name}")]
-
+        return format_current_time_in_timezone(timezone)
     except Exception as e:
-        return [TextContent(type="text", text=f"工具调用出错: {str(e)}")]
+        return f"获取时间出错: {str(e)}"
 
 
-async def main():
-    """主函数，运行MCP服务器"""
-    from mcp.server.stdio import stdio_server
+def _scan_todos(root_dir: str) -> List[Dict[str, Any]]:
+    """
+    扫描指定目录下的 TODO，并提取上下文。
+    """
+    todos = []
+    # 遍历文件
+    for root, dirs, files in os.walk(root_dir):
+        # 忽略常见的非代码目录
+        if any(ignore in root for ignore in ['.git', '__pycache__', 'node_modules', '.venv', 'venv']):
+            continue
+            
+        for file in files:
+            if not file.endswith(('.py', '.java', '.js', '.ts', '.md')): # 支持常见代码文件
+                continue
+                
+            file_path = os.path.join(root, file)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    
+                for i, line in enumerate(lines):
+                    if 'TODO' in line:
+                        # 上下文提取：TODO 行 + 后续 15 行
+                        context_lines = lines[i:min(i+15, len(lines))]
+                        context = "".join(context_lines).strip()
+                        
+                        rel_path = os.path.relpath(file_path, root_dir)
+                        todos.append({
+                            'file': rel_path,
+                            'line': i + 1,
+                            'content': line.strip(),
+                            'context': context
+                        })
+            except Exception as e:
+                # 忽略读取错误
+                pass
+    return todos
 
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
-        )
+
+@mcp.tool()
+def list_todos(directory: str = ".") -> str:
+    """
+    列出指定目录（默认为当前目录）下所有的 TODO 项及其代码上下文。
+    返回 JSON 格式的字符串。
+    
+    Args:
+        directory: 要扫描的根目录路径。
+    """
+    return _list_todos_impl(directory)
+
+def _list_todos_impl(directory: str = ".") -> str:
+    # 如果是 "."，则使用 PROJECT_ROOT
+    if directory == ".":
+        abs_dir = str(PROJECT_ROOT)
+    else:
+        abs_dir = os.path.abspath(directory)
+        
+    if not os.path.exists(abs_dir):
+        return json.dumps({"error": f"Directory not found: {abs_dir}"})
+        
+    logger.info(f"Scanning TODOs in {abs_dir}")
+    todos = _scan_todos(abs_dir)
+    return json.dumps(todos, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def get_todo_context(file_path: str, line_number: int) -> str:
+    """
+    获取特定文件中特定行号附近的 TODO 上下文。
+    用于深入查看某个 TODO 的详细信息。
+    
+    Args:
+        file_path: 文件路径
+        line_number: TODO 所在的行号
+    """
+    return _get_todo_context_impl(file_path, line_number)
+
+def _get_todo_context_impl(file_path: str, line_number: int) -> str:
+    try:
+        # 尝试处理相对路径
+        if not os.path.isabs(file_path):
+             file_path = str(PROJECT_ROOT / file_path)
+
+        if not os.path.exists(file_path):
+             return json.dumps({"error": f"File not found: {file_path}"})
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+        target_index = line_number - 1
+        if target_index < 0 or target_index >= len(lines):
+             return json.dumps({"error": "Line number out of range"})
+
+        # 获取更宽的上下文：前后各 20 行
+        start = max(0, target_index - 5)
+        end = min(len(lines), target_index + 20)
+        
+        context_lines = lines[start:end]
+        context = "".join(context_lines)
+        
+        return json.dumps({
+            "file": file_path,
+            "line": line_number,
+            "content": lines[target_index].strip(),
+            "full_context": context
+        }, ensure_ascii=False, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 if __name__ == "__main__":
     # 运行服务器
-    asyncio.run(main())
+    mcp.run()

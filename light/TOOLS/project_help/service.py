@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+
 from mcp.server import Server
 from mcp.types import (
     Resource,
@@ -19,6 +20,8 @@ from mcp.types import (
     LoggingLevel
 )
 import mcp.server.stdio
+
+
 
 
 class ProjectModuleExplorer:
@@ -32,7 +35,49 @@ class ProjectModuleExplorer:
             project_root: 项目根目录路径，如果为None则使用当前工作目录
         """
         self.project_root = Path(project_root) if project_root else Path.cwd()
-
+    
+    """
+        辅助工具
+    """
+    def _scan_todos(root_dir: str) -> List[Dict[str, Any]]:
+        """
+        扫描指定目录下的 TODO，并提取上下文。
+        """
+        todos = []
+        # 遍历文件
+        for root, dirs, files in os.walk(root_dir):
+            # 忽略常见的非代码目录
+            if any(ignore in root for ignore in ['.git', '__pycache__', 'node_modules', '.venv', 'venv']):
+                continue
+                
+            for file in files:
+                if not file.endswith(('.py', '.java', '.js', '.ts', '.md')): # 支持常见代码文件
+                    continue
+                    
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                        
+                    for i, line in enumerate(lines):
+                        if 'TODO' in line:
+                            # 上下文提取：TODO 行 + 后续 15 行
+                            context_lines = lines[i:min(i+15, len(lines))]
+                            context = "".join(context_lines).strip()
+                            
+                            rel_path = os.path.relpath(file_path, root_dir)
+                            todos.append({
+                                'file': rel_path,
+                                'line': i + 1,
+                                'content': line.strip(),
+                                'context': context
+                            })
+                except Exception as e:
+                    # 忽略读取错误
+                    pass
+        return todos
+    
+    
     def find_all_readme_files(self) -> List[Path]:
         """
         查找项目中所有README.md文件
@@ -230,7 +275,7 @@ def format_current_time_in_timezone(tz: str) -> str:
     return f"{now.year}年{now.month:02d}月{now.day:02d}日 {now.hour:02d}:{now.minute:02d}"
 
 
-# 创建FastMCP应用
+# 创建MCP应用
 app = Server("project-help")
 
 # 自动检测项目根目录（当前文件的 PROJECT_ROOT/TOOLS/project_help/service.py）
@@ -257,7 +302,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="get_all_modules",
-            description="获取项目中所有带有YAML头的README.md文件信息，返回模块列表和简介",
+            description="你必须调用该工具以确保你对整个项目的了解，除非你已经查看过相关的记录",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -266,7 +311,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_module_details",
-            description="获取指定路径下README.md文件的详细信息，包括完整内容和YAML头",
+            description="你可以使用这个工具获取项目的部分详情。",
             inputSchema={
                 "type": "object",
                 "properties": {

@@ -70,6 +70,23 @@ pip install -r requirements.txt
    - 输入README.md文件路径
    - 返回完整的YAML头和文件内容
 
+
+3. **get_current_time** - 获取当前时间
+   - 支持指定时区（默认Asia/Shanghai）
+   - 返回格式化的时间字符串（如：2026年01月02日 09:30）
+
+4. **list_todos** - 扫描项目TODO: 
+   - 扫描指定目录（默认当前项目根目录）下的所有代码文件
+   - 提取包含TODO标记的行及其上下文
+   - 自动忽略常见非代码目录（.git, node_modules等）
+   - 返回JSON格式的TODO列表
+
+5. **get_todo_context** - 获取TODO详细上下文
+   - 输入文件路径和行号
+   - 返回指定TODO前后的代码上下文（前5行+后20行）
+   - 用于深入分析TODO的具体需求
+
+TODO: git分区管理功能(由Agent独立管理项目),文档mcp化(支持可以迁移的智能体能力,减少项目的文档依赖。)
 ## 使用建议
 
 1. **MCP服务强烈推荐安装**：虽然可选，但安装project-help MCP服务可以显著提升Agent对项目结构的理解能力

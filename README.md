@@ -1,3 +1,7 @@
+<p align="center">
+  <strong>English</strong> | <a href="README.zh-CN.md">中文</a>
+</p>
+
 AI Development Assistant Template
 
 A management template for unlocking the potential of Agent-based development assistants, focused on enhancing readability and code quality, inspired by Specification-Driven Development and Skill.
